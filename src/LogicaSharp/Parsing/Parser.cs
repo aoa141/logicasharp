@@ -652,8 +652,8 @@ public class Parser
 
     private bool IsPredicateName(string name)
     {
-        // Predicates start with uppercase
-        return !string.IsNullOrEmpty(name) && char.IsUpper(name[0]);
+        // Predicates start with uppercase OR are backtick-quoted external table references
+        return !string.IsNullOrEmpty(name) && (char.IsUpper(name[0]) || name.StartsWith('`'));
     }
 
     private void SkipSemicolons()

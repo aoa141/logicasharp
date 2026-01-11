@@ -72,11 +72,11 @@ public class RuleTranslator
     {
         var sb = new StringBuilder();
 
-        // Build SELECT clause from head
-        var selectClause = BuildSelectClause(rule.Head);
-
-        // Build FROM/WHERE clauses from body
+        // Build FROM/WHERE clauses from body FIRST to establish variable bindings
         var (fromClause, whereClause, groupByClause) = BuildFromWhereClause(rule.Body, predicateName);
+
+        // Build SELECT clause from head (now with variable bindings available)
+        var selectClause = BuildSelectClause(rule.Head);
 
         sb.Append("SELECT ");
         sb.AppendLine(selectClause);
@@ -312,25 +312,45 @@ public class RuleTranslator
         List<string> groupByColumns,
         string currentPredicate)
     {
-        var alias = _context.NextAlias(call.PredicateName.ToLowerInvariant());
+        var predicateName = call.PredicateName;
+
+        // Check if this is a backtick-quoted external table reference
+        bool isExternalTable = predicateName.StartsWith('`') && predicateName.EndsWith('`');
+        string tableName = predicateName;
+        string aliasBase;
+
+        if (isExternalTable)
+        {
+            // Remove backticks and get the raw table name
+            tableName = predicateName[1..^1];
+            // Create alias by replacing dots and special chars with underscores
+            aliasBase = tableName.Replace(".", "_").Replace("-", "_");
+        }
+        else
+        {
+            aliasBase = predicateName.ToLowerInvariant();
+        }
+
+        var alias = _context.NextAlias(aliasBase);
 
         // Check if this is a reference to a defined predicate or a table
-        if (_context.HasRules(call.PredicateName))
+        if (!isExternalTable && _context.HasRules(predicateName))
         {
             // It's a defined predicate - need to inline or use subquery
-            var subQuery = CompilePredicate(call.PredicateName);
+            var subQuery = CompilePredicate(predicateName);
             tables.Add($"({subQuery}) AS {_context.Dialect.QuoteIdentifier(alias)}");
         }
         else
         {
-            // Assume it's a table reference
-            tables.Add($"{_context.Dialect.QuoteIdentifier(call.PredicateName)} AS {_context.Dialect.QuoteIdentifier(alias)}");
+            // It's a table reference (external or undefined predicate treated as table)
+            var quotedTable = _context.Dialect.QuoteIdentifier(tableName);
+            tables.Add($"{quotedTable} AS {alias}");
         }
 
         // Process field bindings
         foreach (var field in call.Arguments.Fields)
         {
-            var columnRef = $"{_context.Dialect.QuoteIdentifier(alias)}.{_context.Dialect.QuoteIdentifier(field.Field)}";
+            var columnRef = $"{alias}.{_context.Dialect.QuoteIdentifier(field.Field)}";
 
             if (field.Value is Variable v)
             {
@@ -343,6 +363,8 @@ public class RuleTranslator
                 else
                 {
                     variableBindings[v.Name] = columnRef;
+                    // Immediately bind to expression translator so subsequent expressions can use it
+                    _exprTranslator.BindVariable(v.Name, columnRef);
                 }
             }
             else if (field.Value != null)
@@ -362,14 +384,18 @@ public class RuleTranslator
         var sb = new StringBuilder();
         sb.Append("SELECT 1 FROM ");
 
-        if (_context.HasRules(call.PredicateName))
+        var predicateName = call.PredicateName;
+        bool isExternalTable = predicateName.StartsWith('`') && predicateName.EndsWith('`');
+
+        if (!isExternalTable && _context.HasRules(predicateName))
         {
-            var subQuery = CompilePredicate(call.PredicateName);
+            var subQuery = CompilePredicate(predicateName);
             sb.Append($"({subQuery}) AS neg_sub");
         }
         else
         {
-            sb.Append($"{_context.Dialect.QuoteIdentifier(call.PredicateName)} AS neg_sub");
+            var tableName = isExternalTable ? predicateName[1..^1] : predicateName;
+            sb.Append($"{_context.Dialect.QuoteIdentifier(tableName)} AS neg_sub");
         }
 
         var conditions = new List<string>();

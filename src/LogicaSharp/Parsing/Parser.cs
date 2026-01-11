@@ -181,6 +181,8 @@ public class Parser
             return new PredicateCall(name, new Record([]));
         }
 
+        // Reset field counter for each predicate call so positional args get consistent names
+        _fieldCounter = 0;
         var args = ParseRecord();
         Expect(TokenType.RightParen, "Expected ')' after predicate arguments");
 

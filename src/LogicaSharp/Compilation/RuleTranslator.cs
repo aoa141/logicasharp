@@ -333,12 +333,22 @@ public class RuleTranslator
 
         var alias = _context.NextAlias(aliasBase);
 
+        // Get the output column names for defined predicates
+        List<string>? predicateColumnNames = null;
+
         // Check if this is a reference to a defined predicate or a table
         if (!isExternalTable && _context.HasRules(predicateName))
         {
             // It's a defined predicate - need to inline or use subquery
             var subQuery = CompilePredicate(predicateName);
             tables.Add($"({subQuery}) AS {_context.Dialect.QuoteIdentifier(alias)}");
+
+            // Get the output column names from the predicate definition
+            var rules = _context.GetRules(predicateName);
+            if (rules.Count > 0)
+            {
+                predicateColumnNames = GetOutputColumnNames(rules[0].Head);
+            }
         }
         else
         {
@@ -348,9 +358,19 @@ public class RuleTranslator
         }
 
         // Process field bindings
-        foreach (var field in call.Arguments.Fields)
+        for (int i = 0; i < call.Arguments.Fields.Count; i++)
         {
-            var columnRef = $"{alias}.{_context.Dialect.QuoteIdentifier(field.Field)}";
+            var field = call.Arguments.Fields[i];
+
+            // Determine the actual column name to use
+            // If this is a defined predicate, map positional args to the predicate's column names
+            string actualColumnName = field.Field;
+            if (predicateColumnNames != null && i < predicateColumnNames.Count && field.Field.StartsWith("col"))
+            {
+                actualColumnName = predicateColumnNames[i];
+            }
+
+            var columnRef = $"{alias}.{_context.Dialect.QuoteIdentifier(actualColumnName)}";
 
             if (field.Value is Variable v)
             {
@@ -374,6 +394,26 @@ public class RuleTranslator
                 conditions.Add($"{columnRef} = {valueExpr}");
             }
         }
+    }
+
+    /// <summary>
+    /// Gets the output column names from a predicate call (used for field mapping).
+    /// </summary>
+    private List<string> GetOutputColumnNames(PredicateCall head)
+    {
+        var columns = new List<string>();
+        int positionalIndex = 0;
+
+        foreach (var field in head.Arguments.Fields)
+        {
+            var columnName = string.IsNullOrEmpty(field.Field) || field.Field.StartsWith("col")
+                ? $"col{positionalIndex++}"
+                : field.Field;
+
+            columns.Add(columnName);
+        }
+
+        return columns;
     }
 
     /// <summary>

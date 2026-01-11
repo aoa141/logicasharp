@@ -11,6 +11,7 @@ public class RuleTranslator
 {
     private readonly CompilationContext _context;
     private readonly ExpressionTranslator _exprTranslator;
+    private readonly HashSet<string> _compilingPredicates = new();
 
     public RuleTranslator(CompilationContext context)
     {
@@ -31,21 +32,37 @@ public class RuleTranslator
             throw new CompilationException($"Predicate '{predicateName}' not found");
         }
 
-        // Check if recursive
-        if (_context.IsRecursive(predicateName))
+        // Prevent infinite recursion - if we're already compiling this predicate,
+        // we're in a recursive reference and should not try to recompile
+        if (_compilingPredicates.Contains(predicateName))
         {
-            return CompileRecursivePredicate(predicateName, rules);
+            // Return a reference to the CTE that will be created
+            return $"SELECT * FROM {_context.Dialect.QuoteIdentifier(predicateName)}";
         }
 
-        // Compile each rule and UNION ALL them
-        var queries = rules.Select(r => CompileRule(r, predicateName)).ToList();
-
-        if (queries.Count == 1)
+        _compilingPredicates.Add(predicateName);
+        try
         {
-            return queries[0];
-        }
+            // Check if recursive
+            if (_context.IsRecursive(predicateName))
+            {
+                return CompileRecursivePredicate(predicateName, rules);
+            }
 
-        return string.Join("\nUNION ALL\n", queries.Select(q => $"({q})"));
+            // Compile each rule and UNION ALL them
+            var queries = rules.Select(r => CompileRule(r, predicateName)).ToList();
+
+            if (queries.Count == 1)
+            {
+                return queries[0];
+            }
+
+            return string.Join("\nUNION ALL\n", queries.Select(q => $"({q})"));
+        }
+        finally
+        {
+            _compilingPredicates.Remove(predicateName);
+        }
     }
 
     /// <summary>

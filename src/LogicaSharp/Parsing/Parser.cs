@@ -10,6 +10,7 @@ public class Parser
 {
     private readonly List<Token> _tokens;
     private int _position;
+    private int _fieldCounter;
 
     public Parser(IEnumerable<Token> tokens)
     {
@@ -223,7 +224,7 @@ public class Parser
              _tokens[_position + 1].Type != TokenType.Question))
         {
             var expr = ParseExpression();
-            return new FieldValue("col" + new Random().Next(1000), expr);
+            return new FieldValue("col" + _fieldCounter++, expr);
         }
 
         var fieldName = Advance().Value;
@@ -242,7 +243,7 @@ public class Parser
             // This was actually an expression, not a field name
             _position--;
             var expr = ParseExpression();
-            return new FieldValue("col" + new Random().Next(1000), expr);
+            return new FieldValue("col" + _fieldCounter++, expr);
         }
 
         // Check for shorthand (field:) - field name used as variable

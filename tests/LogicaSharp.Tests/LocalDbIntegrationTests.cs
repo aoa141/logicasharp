@@ -278,7 +278,7 @@ Ancestor(ancestor:a, descendant:d) :- Parent(a, c), Ancestor(c, d);
 
     #region Aggregation Tests
 
-    [Fact(Skip = "Aggregation syntax (count? += 1) not yet supported")]
+    [Fact]
     public void CountAggregation_CountsCorrectly()
     {
         // Arrange
@@ -307,7 +307,7 @@ ProductSaleCount(product:, count? += 1) :- Sale(product:, amount:);
         Assert.Equal(1, Convert.ToInt32(gadgetRow["count"]));
     }
 
-    [Fact(Skip = "Aggregation syntax (total? += amount) not yet supported")]
+    [Fact]
     public void SumAggregation_SumsCorrectly()
     {
         // Arrange

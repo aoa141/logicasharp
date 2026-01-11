@@ -73,10 +73,13 @@ public class RuleTranslator
         var sb = new StringBuilder();
 
         // Build FROM/WHERE clauses from body FIRST to establish variable bindings
-        var (fromClause, whereClause, groupByClause) = BuildFromWhereClause(rule.Body, predicateName);
+        var (fromClause, whereClause, _) = BuildFromWhereClause(rule.Body, predicateName);
 
         // Build SELECT clause from head (now with variable bindings available)
         var selectClause = BuildSelectClause(rule.Head);
+
+        // Build GROUP BY clause if there are aggregations
+        var groupByClause = BuildGroupByClause(rule.Head);
 
         sb.Append("SELECT ");
         sb.AppendLine(selectClause);
@@ -100,6 +103,42 @@ public class RuleTranslator
         }
 
         return sb.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Builds the GROUP BY clause based on non-aggregated fields in the head.
+    /// </summary>
+    private string BuildGroupByClause(PredicateCall head)
+    {
+        // Check if there are any aggregations
+        bool hasAggregations = head.Arguments.Fields.Any(f =>
+            f.Aggregation.HasValue && f.Aggregation.Value != AggregationType.None);
+
+        if (!hasAggregations)
+        {
+            return "";
+        }
+
+        // Collect non-aggregated field expressions for GROUP BY
+        var groupByExprs = new List<string>();
+
+        foreach (var field in head.Arguments.Fields)
+        {
+            // Skip aggregated fields
+            if (field.Aggregation.HasValue && field.Aggregation.Value != AggregationType.None)
+            {
+                continue;
+            }
+
+            // For non-aggregated fields, get the expression
+            if (field.Value != null)
+            {
+                var expr = _exprTranslator.Translate(field.Value);
+                groupByExprs.Add(expr);
+            }
+        }
+
+        return string.Join(", ", groupByExprs);
     }
 
     /// <summary>

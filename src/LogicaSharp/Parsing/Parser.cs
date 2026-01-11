@@ -234,11 +234,22 @@ public class Parser
         // Check for aggregation marker ?
         if (Match(TokenType.Question))
         {
-            aggregation = AggregationType.Collect;
-            if (!Match(TokenType.Colon))
+            // Check for ? += (sum aggregation) or ? : (collect aggregation)
+            if (Match(TokenType.PlusEquals))
             {
+                // Sum aggregation: count? += 1 or total? += amount
+                aggregation = AggregationType.Sum;
+                var aggValue = ParseExpression();
+                return new FieldValue(fieldName, aggValue, aggregation);
+            }
+            else if (!Match(TokenType.Colon))
+            {
+                // Just ? without : or += means collect with no value
+                aggregation = AggregationType.Collect;
                 return new FieldValue(fieldName, null, aggregation);
             }
+            // If we matched :, continue to parse value below
+            aggregation = AggregationType.Collect;
         }
         else if (!Match(TokenType.Colon))
         {

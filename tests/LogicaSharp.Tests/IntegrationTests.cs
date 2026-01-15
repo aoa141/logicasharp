@@ -1,3 +1,5 @@
+using LogicaSharp.Compilation;
+
 namespace LogicaSharp.Tests;
 
 /// <summary>
@@ -7,6 +9,59 @@ namespace LogicaSharp.Tests;
 /// </summary>
 public class IntegrationTests
 {
+    [Fact]
+    public void Functor_SimpleFunctor_GeneratesCorrectSQL()
+    {
+        // Simpler test first - basic rule with same structure should work
+        var simpleSource = @"
+@Engine(""mssql"");
+
+DailyActiveUsers(user: ""alice"", product: ""App"", os: ""Windows"", sessions: 5);
+DailyActiveUsers(user: ""bob"", product: ""App"", os: ""Mac"", sessions: 3);
+
+FilteredDAU(user:, sessions:) :-
+    DailyActiveUsers(user:, product:, os:, sessions:),
+    product == ""App"",
+    os == ""Windows"";
+";
+
+        var simpleSql = Logica.Compile(simpleSource, "FilteredDAU", "mssql");
+        Assert.True(simpleSql.Contains("FROM", StringComparison.OrdinalIgnoreCase),
+            $"Simple rule - Expected FROM clause in SQL:\n{simpleSql}");
+
+        // Now test with functor
+        var source = @"
+@Engine(""mssql"");
+
+DailyActiveUsers(user: ""alice"", product: ""App"", os: ""Windows"", sessions: 5);
+DailyActiveUsers(user: ""bob"", product: ""App"", os: ""Mac"", sessions: 3);
+
+@Functor(""FilterByProductOs"");
+FilterByProductOs(user:, sessions:) :-
+    source(user:, product:, os:, sessions:),
+    product == filterProduct,
+    os == filterOs;
+
+FilteredDAU := FilterByProductOs(source: DailyActiveUsers, filterProduct: ""App"", filterOs: ""Windows"");
+";
+
+        var compiler = new LogicaCompiler("mssql");
+        var simpleBodyDesc = compiler.DescribeRuleBody(simpleSource, "FilteredDAU");
+        var functorTemplateBodyDesc = compiler.DescribeRuleBody(source, "FilterByProductOs");
+        var functorBodyDesc = compiler.DescribeRuleBody(source, "FilteredDAU");
+        var sql = Logica.Compile(source, "FilteredDAU", "mssql");
+
+        // Compare body structures
+        Assert.True(functorBodyDesc.Contains("BodyCall"),
+            $"Functor body should contain BodyCall.\n\nFunctor template body:\n{functorTemplateBodyDesc}\n\nFunctor expanded body:\n{functorBodyDesc}\n\nSimple body:\n{simpleBodyDesc}");
+
+        // Should have FROM clause with DailyActiveUsers
+        Assert.True(sql.Contains("FROM", StringComparison.OrdinalIgnoreCase),
+            $"Functor - Expected FROM clause in SQL:\n{sql}\n\nSimple SQL for comparison:\n{simpleSql}\n\nFunctor body:\n{functorBodyDesc}\n\nSimple body:\n{simpleBodyDesc}");
+        // Should NOT have comment placeholder
+        Assert.False(sql.Contains("/*"), $"Unexpected comment placeholder in SQL:\n{sql}");
+    }
+
     /// <summary>
     /// Test based on Python output:
     /// SELECT 'Alice' AS col0, 30 AS col1 UNION ALL SELECT 'Bob' AS col0, 25 AS col1

@@ -24,6 +24,12 @@ public class CompilationContext
     public Dictionary<string, FunctionRule> Functions { get; } = new();
 
     /// <summary>
+    /// Functor (template) definitions indexed by name.
+    /// A functor is a predicate template that can be instantiated with different source predicates.
+    /// </summary>
+    public Dictionary<string, List<Rule>> Functors { get; } = new();
+
+    /// <summary>
     /// Annotations from the program.
     /// </summary>
     public List<Annotation> Annotations { get; } = [];
@@ -81,9 +87,158 @@ public class CompilationContext
     }
 
     /// <summary>
+    /// Registers a predicate as a functor template.
+    /// </summary>
+    public void RegisterFunctor(string name)
+    {
+        if (Rules.TryGetValue(name, out var rules))
+        {
+            Functors[name] = rules;
+        }
+    }
+
+    /// <summary>
+    /// Expands a functor rule into concrete rules by substituting predicate references.
+    /// </summary>
+    /// <param name="functorRule">The functor instantiation.</param>
+    public void ExpandFunctor(FunctorRule functorRule)
+    {
+        if (!Functors.TryGetValue(functorRule.FunctorName, out var templateRules))
+        {
+            throw new CompilationException($"Functor '{functorRule.FunctorName}' not found. Make sure to annotate it with @Functor.");
+        }
+
+        // Build substitution maps from functor arguments
+        // predicateSubstitutions: for predicate name replacements (e.g., source -> DailyActiveUsers)
+        // expressionSubstitutions: for variable-to-expression replacements (e.g., filterProduct -> "App")
+        var predicateSubstitutions = new Dictionary<string, string>();
+        var expressionSubstitutions = new Dictionary<string, IExpression>();
+
+        foreach (var field in functorRule.Arguments.Fields)
+        {
+            if (field.Value is Variable v)
+            {
+                // Variable argument - could be a predicate reference
+                predicateSubstitutions[field.Field] = v.Name;
+            }
+            else if (field.Value is PredicateCall pc)
+            {
+                // Explicit predicate call - use predicate name
+                predicateSubstitutions[field.Field] = pc.PredicateName;
+            }
+            else if (field.Value != null)
+            {
+                // Literal values (strings, numbers, etc.) - substitute as expressions
+                expressionSubstitutions[field.Field] = field.Value;
+            }
+        }
+
+        // Clone and substitute each template rule
+        foreach (var templateRule in templateRules)
+        {
+            var newRule = SubstituteInRule(templateRule, functorRule.PredicateName, predicateSubstitutions, expressionSubstitutions);
+            AddRule(newRule);
+        }
+    }
+
+    /// <summary>
+    /// Substitutes predicate references in a rule.
+    /// </summary>
+    private Rule SubstituteInRule(Rule rule, string newPredicateName,
+        Dictionary<string, string> predicateSubs, Dictionary<string, IExpression> exprSubs)
+    {
+        var newHead = new PredicateCall(newPredicateName, SubstituteInRecord(rule.Head.Arguments, predicateSubs, exprSubs));
+        var newBody = rule.Body != null ? SubstituteInBody(rule.Body, predicateSubs, exprSubs) : null;
+        return new Rule(newHead, newBody);
+    }
+
+    private IBody SubstituteInBody(IBody body,
+        Dictionary<string, string> predicateSubs, Dictionary<string, IExpression> exprSubs)
+    {
+        return body switch
+        {
+            BodyCall bc => new BodyCall(SubstituteInPredicateCall(bc.Call, predicateSubs, exprSubs)),
+            Conjunction conj => new Conjunction(conj.Conjuncts.Select(c => SubstituteInBody(c, predicateSubs, exprSubs)).ToList()),
+            Disjunction disj => new Disjunction(disj.Disjuncts.Select(d => SubstituteInBody(d, predicateSubs, exprSubs)).ToList()),
+            Negation neg => new Negation(SubstituteInBody(neg.Body, predicateSubs, exprSubs)),
+            ExpressionCondition ec => new ExpressionCondition(SubstituteInExpression(ec.Expression, predicateSubs, exprSubs)),
+            _ => body
+        };
+    }
+
+    private PredicateCall SubstituteInPredicateCall(PredicateCall call,
+        Dictionary<string, string> predicateSubs, Dictionary<string, IExpression> exprSubs)
+    {
+        var newName = predicateSubs.TryGetValue(call.PredicateName, out var sub) ? sub : call.PredicateName;
+        return new PredicateCall(newName, SubstituteInRecord(call.Arguments, predicateSubs, exprSubs));
+    }
+
+    private Record SubstituteInRecord(Record record,
+        Dictionary<string, string> predicateSubs, Dictionary<string, IExpression> exprSubs)
+    {
+        var newFields = record.Fields.Select(f => SubstituteInFieldValue(f, predicateSubs, exprSubs)).ToList();
+        return new Record(newFields, record.Spread != null ? SubstituteInExpression(record.Spread, predicateSubs, exprSubs) : null);
+    }
+
+    private FieldValue SubstituteInFieldValue(FieldValue field,
+        Dictionary<string, string> predicateSubs, Dictionary<string, IExpression> exprSubs)
+    {
+        var newValue = field.Value != null ? SubstituteInExpression(field.Value, predicateSubs, exprSubs) : null;
+        return new FieldValue(field.Field, newValue, field.Aggregation);
+    }
+
+    private IExpression SubstituteInExpression(IExpression expr,
+        Dictionary<string, string> predicateSubs, Dictionary<string, IExpression> exprSubs)
+    {
+        return expr switch
+        {
+            // First check if this variable should be substituted with an expression (literal)
+            Variable v when exprSubs.TryGetValue(v.Name, out var newExpr) => newExpr,
+            // Then check if it's a predicate name substitution
+            Variable v when predicateSubs.TryGetValue(v.Name, out var newName) => new Variable(newName),
+            PredicateCall pc => SubstituteInPredicateCall(pc, predicateSubs, exprSubs),
+            BinaryOp bo => new BinaryOp(
+                SubstituteInExpression(bo.Left, predicateSubs, exprSubs),
+                bo.Operator,
+                SubstituteInExpression(bo.Right, predicateSubs, exprSubs)),
+            UnaryOp uo => new UnaryOp(uo.Operator, SubstituteInExpression(uo.Operand, predicateSubs, exprSubs)),
+            Record r => SubstituteInRecord(r, predicateSubs, exprSubs),
+            _ => expr
+        };
+    }
+
+    /// <summary>
     /// Checks if a predicate has any rules.
     /// </summary>
     public bool HasRules(string predicateName) => Rules.ContainsKey(predicateName);
+
+    /// <summary>
+    /// Debug method to describe the body structure of a rule.
+    /// </summary>
+    public string DescribeRuleBody(string predicateName)
+    {
+        if (!Rules.TryGetValue(predicateName, out var rules) || rules.Count == 0)
+            return $"No rules found for {predicateName}";
+
+        var rule = rules[0];
+        if (rule.Body == null)
+            return $"{predicateName}: body is null (fact)";
+
+        return $"{predicateName}: body = {DescribeBody(rule.Body)}";
+    }
+
+    private string DescribeBody(IBody body)
+    {
+        return body switch
+        {
+            BodyCall bc => $"BodyCall({bc.Call.PredicateName})",
+            Conjunction conj => $"Conjunction([{string.Join(", ", conj.Conjuncts.Select(c => DescribeBody(c)))}])",
+            Disjunction disj => $"Disjunction([{string.Join(", ", disj.Disjuncts.Select(d => DescribeBody(d)))}])",
+            Negation neg => $"Negation({DescribeBody(neg.Body)})",
+            ExpressionCondition ec => $"ExpressionCondition({ec.Expression.GetType().Name})",
+            _ => body.GetType().Name
+        };
+    }
 
     /// <summary>
     /// Gets all rules for a predicate.

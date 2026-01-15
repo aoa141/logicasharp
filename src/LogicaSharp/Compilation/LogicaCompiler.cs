@@ -101,12 +101,24 @@ public class LogicaCompiler
     }
 
     /// <summary>
+    /// Debug method to describe the structure of a rule's body.
+    /// </summary>
+    public string DescribeRuleBody(string source, string predicateName)
+    {
+        var program = Parse(source);
+        var context = CreateContext(program);
+        return context.DescribeRuleBody(predicateName);
+    }
+
+    /// <summary>
     /// Creates a compilation context from a program.
     /// </summary>
     private CompilationContext CreateContext(Program program)
     {
         var context = new CompilationContext(_dialect);
+        var functorRules = new List<FunctorRule>();
 
+        // First pass: collect all rules, annotations, and functor rules
         foreach (var statement in program.Statements)
         {
             switch (statement)
@@ -122,7 +134,41 @@ public class LogicaCompiler
                 case FunctionRule func:
                     context.AddFunction(func);
                     break;
+
+                case FunctorRule functorRule:
+                    functorRules.Add(functorRule);
+                    break;
             }
+        }
+
+        // Second pass: register functors based on @Functor annotations
+        foreach (var annotation in context.Annotations)
+        {
+            if (annotation.Name.Equals("Functor", StringComparison.OrdinalIgnoreCase))
+            {
+                // @Functor(PredicateName) marks a predicate as a functor template
+                if (annotation.Arguments?.Fields.Count > 0)
+                {
+                    var firstArg = annotation.Arguments.Fields[0].Value;
+                    string? functorName = firstArg switch
+                    {
+                        StringLiteral sl => sl.Value,
+                        Variable v => v.Name,
+                        _ => null
+                    };
+
+                    if (functorName != null)
+                    {
+                        context.RegisterFunctor(functorName);
+                    }
+                }
+            }
+        }
+
+        // Third pass: expand functor instantiations
+        foreach (var functorRule in functorRules)
+        {
+            context.ExpandFunctor(functorRule);
         }
 
         return context;

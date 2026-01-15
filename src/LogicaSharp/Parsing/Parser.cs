@@ -338,8 +338,12 @@ public class Parser
             return body;
         }
 
-        // Check if this looks like a predicate call
-        if (Check(TokenType.Identifier) && IsPredicateName(Current().Value))
+        // Check if this looks like a predicate call (uppercase name) or
+        // a lowercase identifier followed by '(' (for functor parameters)
+        bool isPotentialPredicateCall = Check(TokenType.Identifier) &&
+            (IsPredicateName(Current().Value) || IsFollowedByParen());
+
+        if (isPotentialPredicateCall)
         {
             // Could be predicate call
             int startPos = _position;
@@ -667,6 +671,12 @@ public class Parser
     {
         // Predicates start with uppercase OR are backtick-quoted external table references
         return !string.IsNullOrEmpty(name) && (char.IsUpper(name[0]) || name.StartsWith('`'));
+    }
+
+    private bool IsFollowedByParen()
+    {
+        // Check if current identifier is followed by '(' (for functor parameter calls)
+        return _position + 1 < _tokens.Count && _tokens[_position + 1].Type == TokenType.LeftParen;
     }
 
     private void SkipSemicolons()

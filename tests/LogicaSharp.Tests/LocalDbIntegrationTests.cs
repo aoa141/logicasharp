@@ -458,4 +458,171 @@ Pet(name:) :- Cat(name:);
     }
 
     #endregion
+
+    #region Higher-Order Predicate (Functor) Tests
+
+    [Fact]
+    public void Functor_FilterByProductOs_AppliedToDailyActiveUsers()
+    {
+        // Arrange - Define a functor template that filters by product and os,
+        // then instantiate it with DailyActiveUsers table
+        var source = @"
+@Engine(""mssql"");
+
+# Mock data for DailyActiveUsers
+DailyActiveUsers(user: ""alice"", product: ""App"", os: ""Windows"", sessions: 5);
+DailyActiveUsers(user: ""bob"", product: ""App"", os: ""Mac"", sessions: 3);
+DailyActiveUsers(user: ""carol"", product: ""Web"", os: ""Windows"", sessions: 8);
+DailyActiveUsers(user: ""dave"", product: ""App"", os: ""Windows"", sessions: 2);
+DailyActiveUsers(user: ""eve"", product: ""Web"", os: ""Linux"", sessions: 4);
+
+# Define the functor template - filters source by product and os
+@Functor(""FilterByProductOs"");
+FilterByProductOs(user:, sessions:) :-
+    source(user:, product:, os:, sessions:),
+    product == filterProduct,
+    os == filterOs;
+
+# Instantiate the functor with DailyActiveUsers, filtering for App on Windows
+FilteredDAU := FilterByProductOs(source: DailyActiveUsers, filterProduct: ""App"", filterOs: ""Windows"");
+";
+
+        // Act
+        var result = CompileAndExecute(source, "FilteredDAU");
+
+        // Assert - Should return alice (5 sessions) and dave (2 sessions)
+        Assert.Equal(2, result.Rows.Count);
+        var users = result.Rows.Cast<DataRow>().Select(r => r["user"].ToString()).ToList();
+        Assert.Contains("alice", users);
+        Assert.Contains("dave", users);
+    }
+
+    [Fact]
+    public void Functor_FilterByProductOs_AppliedToWeeklyActiveUsers()
+    {
+        // Arrange - Define a functor template and apply it to WeeklyActiveUsers
+        var source = @"
+@Engine(""mssql"");
+
+# Mock data for WeeklyActiveUsers
+WeeklyActiveUsers(user: ""alice"", product: ""App"", os: ""Windows"", sessions: 25);
+WeeklyActiveUsers(user: ""bob"", product: ""App"", os: ""Mac"", sessions: 18);
+WeeklyActiveUsers(user: ""carol"", product: ""Web"", os: ""Windows"", sessions: 42);
+WeeklyActiveUsers(user: ""dave"", product: ""App"", os: ""Windows"", sessions: 15);
+WeeklyActiveUsers(user: ""eve"", product: ""Web"", os: ""Mac"", sessions: 30);
+WeeklyActiveUsers(user: ""frank"", product: ""Web"", os: ""Mac"", sessions: 22);
+
+# Define the functor template
+@Functor(""FilterByProductOs"");
+FilterByProductOs(user:, sessions:) :-
+    source(user:, product:, os:, sessions:),
+    product == filterProduct,
+    os == filterOs;
+
+# Instantiate the functor with WeeklyActiveUsers, filtering for Web on Mac
+FilteredWAU := FilterByProductOs(source: WeeklyActiveUsers, filterProduct: ""Web"", filterOs: ""Mac"");
+";
+
+        // Act
+        var result = CompileAndExecute(source, "FilteredWAU");
+
+        // Assert - Should return eve (30 sessions) and frank (22 sessions)
+        Assert.Equal(2, result.Rows.Count);
+        var users = result.Rows.Cast<DataRow>().Select(r => r["user"].ToString()).ToList();
+        Assert.Contains("eve", users);
+        Assert.Contains("frank", users);
+    }
+
+    [Fact]
+    public void Functor_FilterByProductOs_AppliedToBothTables()
+    {
+        // Arrange - Use the same functor template with two different tables
+        var source = @"
+@Engine(""mssql"");
+
+# Mock data for DailyActiveUsers
+DailyActiveUsers(user: ""alice"", product: ""App"", os: ""Windows"", sessions: 5);
+DailyActiveUsers(user: ""bob"", product: ""App"", os: ""Mac"", sessions: 3);
+DailyActiveUsers(user: ""carol"", product: ""Web"", os: ""Windows"", sessions: 8);
+
+# Mock data for WeeklyActiveUsers
+WeeklyActiveUsers(user: ""alice"", product: ""App"", os: ""Windows"", sessions: 25);
+WeeklyActiveUsers(user: ""bob"", product: ""App"", os: ""Mac"", sessions: 18);
+WeeklyActiveUsers(user: ""dave"", product: ""App"", os: ""Windows"", sessions: 15);
+
+# Define the functor template once
+@Functor(""FilterByProductOs"");
+FilterByProductOs(user:, sessions:) :-
+    source(user:, product:, os:, sessions:),
+    product == filterProduct,
+    os == filterOs;
+
+# Instantiate for DailyActiveUsers - App on Windows
+FilteredDAU := FilterByProductOs(source: DailyActiveUsers, filterProduct: ""App"", filterOs: ""Windows"");
+
+# Instantiate for WeeklyActiveUsers - App on Windows
+FilteredWAU := FilterByProductOs(source: WeeklyActiveUsers, filterProduct: ""App"", filterOs: ""Windows"");
+
+# Combine results from both filtered tables
+CombinedAppWindows(user:, daily_sessions: d, weekly_sessions: w) :-
+    FilteredDAU(user:, sessions: d),
+    FilteredWAU(user:, sessions: w);
+";
+
+        // Act
+        var result = CompileAndExecute(source, "CombinedAppWindows");
+
+        // Assert - Should return alice (daily=5, weekly=25) as she's in both filtered results
+        Assert.Equal(1, result.Rows.Count);
+        var row = result.Rows[0];
+        Assert.Equal("alice", row["user"].ToString());
+        Assert.Equal(5, Convert.ToInt32(row["daily_sessions"]));
+        Assert.Equal(25, Convert.ToInt32(row["weekly_sessions"]));
+    }
+
+    [Fact]
+    public void Functor_WithAggregation_SumSessionsByProduct()
+    {
+        // Arrange - Functor that aggregates sessions by product
+        var source = @"
+@Engine(""mssql"");
+
+# Mock data
+DailyActiveUsers(user: ""alice"", product: ""App"", os: ""Windows"", sessions: 5);
+DailyActiveUsers(user: ""bob"", product: ""App"", os: ""Mac"", sessions: 3);
+DailyActiveUsers(user: ""carol"", product: ""Web"", os: ""Windows"", sessions: 8);
+DailyActiveUsers(user: ""dave"", product: ""App"", os: ""Windows"", sessions: 2);
+
+WeeklyActiveUsers(user: ""alice"", product: ""App"", os: ""Windows"", sessions: 25);
+WeeklyActiveUsers(user: ""bob"", product: ""Web"", os: ""Mac"", sessions: 18);
+
+# Functor that sums sessions by product from any source table
+@Functor(""SumByProduct"");
+SumByProduct(product:, total_sessions? += sessions) :- source(product:, sessions:);
+
+# Apply to both tables
+DailyByProduct := SumByProduct(source: DailyActiveUsers);
+WeeklyByProduct := SumByProduct(source: WeeklyActiveUsers);
+";
+
+        // Act
+        var dailyResult = CompileAndExecute(source, "DailyByProduct");
+        var weeklyResult = CompileAndExecute(source, "WeeklyByProduct");
+
+        // Assert Daily - App: 5+3+2=10, Web: 8
+        Assert.Equal(2, dailyResult.Rows.Count);
+        var dailyApp = dailyResult.Rows.Cast<DataRow>().First(r => r["product"].ToString() == "App");
+        var dailyWeb = dailyResult.Rows.Cast<DataRow>().First(r => r["product"].ToString() == "Web");
+        Assert.Equal(10, Convert.ToInt32(dailyApp["total_sessions"]));
+        Assert.Equal(8, Convert.ToInt32(dailyWeb["total_sessions"]));
+
+        // Assert Weekly - App: 25, Web: 18
+        Assert.Equal(2, weeklyResult.Rows.Count);
+        var weeklyApp = weeklyResult.Rows.Cast<DataRow>().First(r => r["product"].ToString() == "App");
+        var weeklyWeb = weeklyResult.Rows.Cast<DataRow>().First(r => r["product"].ToString() == "Web");
+        Assert.Equal(25, Convert.ToInt32(weeklyApp["total_sessions"]));
+        Assert.Equal(18, Convert.ToInt32(weeklyWeb["total_sessions"]));
+    }
+
+    #endregion
 }
